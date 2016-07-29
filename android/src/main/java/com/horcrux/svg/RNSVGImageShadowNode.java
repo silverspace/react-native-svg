@@ -31,6 +31,8 @@ import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.common.ReactConstants;
 import com.facebook.react.uimanager.annotations.ReactProp;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -44,7 +46,7 @@ public class RNSVGImageShadowNode extends RNSVGPathShadowNode {
     private String mW;
     private String mH;
     private Uri mUri;
-    private boolean mLoading;
+    private AtomicBoolean mLoading = new AtomicBoolean(false);
 
     @ReactProp(name = "x")
     public void setX(String x) {
@@ -86,13 +88,14 @@ public class RNSVGImageShadowNode extends RNSVGPathShadowNode {
 
     @Override
     public void draw(final Canvas canvas, final Paint paint, final float opacity) {
-        final ImageRequest request = ImageRequestBuilder.newBuilderWithSource(mUri).build();
-        final boolean inMemoryCache = Fresco.getImagePipeline().isInBitmapMemoryCache(request);
+        if (!mLoading.get()) {
+            final ImageRequest request = ImageRequestBuilder.newBuilderWithSource(mUri).build();
 
-        if (inMemoryCache) {
-            tryRender(request, canvas, paint, opacity);
-        } else if (!mLoading) {
-            loadBitmap(request, canvas, paint);
+            if (Fresco.getImagePipeline().isInBitmapMemoryCache(request)) {
+                tryRender(request, canvas, paint, opacity);
+            } else {
+                loadBitmap(request, canvas, paint);
+            }
         }
     }
 
@@ -106,8 +109,10 @@ public class RNSVGImageShadowNode extends RNSVGPathShadowNode {
                                      if (bitmap != null) {
                                          canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
                                          paint.reset();
+                                         mLoading.set(false);
+
                                          getSvgShadowNode().drawChildren(canvas, paint);
-                                         mLoading = false;
+                                         getSvgShadowNode().invalidateView(getRect());
                                      }
                                  }
 
@@ -115,7 +120,7 @@ public class RNSVGImageShadowNode extends RNSVGPathShadowNode {
                                  public void onFailureImpl(DataSource dataSource) {
                                      // No cleanup required here.
                                      // TODO: more details about this failure
-                                     mLoading = false;
+                                     mLoading.set(false);
                                      FLog.w(ReactConstants.TAG, dataSource.getFailureCause(), "RNSVG: fetchDecodedImage failed!");
                                  }
                              },
@@ -123,15 +128,22 @@ public class RNSVGImageShadowNode extends RNSVGPathShadowNode {
         );
     }
 
-    private void doRender(@Nonnull final Canvas canvas, @Nonnull final Paint paint, @Nonnull final Bitmap bitmap, final float opacity) {
-        final int count = saveAndSetupCanvas(canvas);
-
-        clip(canvas, paint);
+    @Nonnull
+    private Rect getRect() {
         float x = PropHelper.fromPercentageToFloat(mX, mWidth, 0, mScale);
         float y = PropHelper.fromPercentageToFloat(mY, mHeight, 0, mScale);
         float w = PropHelper.fromPercentageToFloat(mW, mWidth, 0, mScale);
         float h = PropHelper.fromPercentageToFloat(mH, mHeight, 0, mScale);
-        canvas.drawBitmap(bitmap, null, new Rect((int) x, (int) y, (int) (x + w), (int) (y + h)), paint);
+
+        return new Rect((int) x, (int) y, (int) (x + w), (int) (y + h));
+    }
+
+    private void doRender(@Nonnull final Canvas canvas, @Nonnull final Paint paint, @Nonnull final Bitmap bitmap, final float opacity) {
+
+        final int count = saveAndSetupCanvas(canvas);
+        clip(canvas, paint);
+
+        canvas.drawBitmap(bitmap, null, this.getRect(), paint);
 
         restoreCanvas(canvas, count);
         markUpdateSeen();
